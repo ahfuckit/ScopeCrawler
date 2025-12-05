@@ -33,126 +33,87 @@
       ],
       logger = console.log.bind(console),
       label = '[LOG]',
-      wrapTarget = 'root', // 'root' | 'prototype' | 'owner'
-      awaitPromises = false,
-      expandChildren = [],
     } = options || {};
 
-    const wrappedTargets = new WeakMap();
+    const wrappedKeys = new Set();
 
-    function markWrapped(target, key) {
-      if (!target) return false;
-      let set = wrappedTargets.get(target);
-      if (!set) {
-        set = new Set();
-        wrappedTargets.set(target, set);
-      }
-      if (set.has(key)) return true;
-      set.add(key);
-      return false;
-    }
+    // Clone matchers and inject transforms that do the wrapping
+    const loggingMatchers = matchers.map(function (m) {
+      // Shallow copy so we don't mutate the caller's matcher object
+      const clone = {
+        type: m.type,
+        value: m.value,
+        transform: m.transform
+      };
 
-    function runLogger(info) {
-      try {
-        logger(info);
-      } catch (_logErr) {
-        // Ignore logger failures
-      }
-    }
+      clone.transform = function (key, value, matcherValue) {
+        // Preserve any existing transform, but run our wrapper logic too.
+        const originalTransform = m.transform;
 
-    function resolveTarget(sourceObj) {
-      if (wrapTarget === 'owner') return sourceObj || obj;
-      if (wrapTarget === 'prototype') {
-        try {
-          if (sourceObj && typeof sourceObj === 'function' && sourceObj.prototype) {
-            return sourceObj.prototype;
-          }
-        } catch {}
-
-        try {
-          const proto = Object.getPrototypeOf(sourceObj);
-          if (proto) return proto;
-        } catch {}
-
-        return obj;
-      }
-      // Default: patch on the root object provided by the caller
-      return obj;
-    }
-
-    function wrapFunction(key, value, sourceObj) {
-      if (typeof value !== 'function') return;
-      const target = resolveTarget(sourceObj);
-      if (!target) return;
-
-      // Skip if already wrapped on this target
-      if (markWrapped(target, key)) return;
-
-      let descriptor;
-      try {
-        descriptor = Object.getOwnPropertyDescriptor(target, key);
-        if (descriptor && descriptor.get && !descriptor.set && !descriptor.writable) {
-          return;
-        }
-      } catch {}
-
-      const originalFn = target[key];
-
-      try {
-        target[key] = function () {
-          const args = Array.prototype.slice.call(arguments);
-          let result;
-          let error;
-
+        if (!wrappedKeys.has(key) && typeof value === 'function') {
           try {
-            result = originalFn.apply(this, args);
-          } catch (err) {
-            error = err;
-            runLogger({ label, key, args, result, error, thisArg: this, phase: 'call' });
-            throw err;
-          }
+            const originalFn = value;
 
-          if (awaitPromises && result && typeof result.then === 'function') {
-            runLogger({ label, key, args, result, thisArg: this, phase: 'call' });
-            return result.then((resolved) => {
-              runLogger({ label, key, args, result: resolved, thisArg: this, phase: 'resolved' });
-              return resolved;
-            }).catch((err) => {
-              runLogger({ label, key, args, error: err, thisArg: this, phase: 'rejected' });
-              throw err;
-            });
-          }
+            // Replace obj[key] with a logging wrapper
+            obj[key] = function () {
+              const args = Array.prototype.slice.call(arguments);
+              let result;
+              let error;
 
-          runLogger({ label, key, args, result, error, thisArg: this, phase: 'call' });
-          return result;
-        };
-      } catch (e) {
-        // Non-writable / non-configurable properties, etc. Ignore.
-      }
-    }
+              try {
+                result = originalFn.apply(this, args);
+              } catch (err) {
+                error = err;
+              }
+
+              try {
+                logger({
+                  label,
+                  key,
+                  args,
+                  result,
+                  error,
+                  thisArg: this
+                });
+              } catch (_logErr) {
+                // Swallow logging errors so we don't break the app
+              }
+
+              if (error) {
+                throw error;
+              }
+              return result;
+            };
+
+            wrappedKeys.add(key);
+          } catch (e) {
+            // Non-writable / non-configurable properties, etc. Ignore.
+          }
+        }
+
+        // Run any original transform to still feed names back into the collector
+        if (typeof originalTransform === 'function') {
+          try {
+            return originalTransform(key, value, matcherValue);
+          } catch (e) {
+            return undefined;
+          }
+        }
+
+        return key;
+      };
+
+      return clone;
+    });
 
     MC.collectMembersWide({
       root: obj,
-      matchers,
-      onMatch: function (info) {
-        wrapFunction(info.key, info.value, info.source);
-      },
-      expandChildren,
+      matchers: loggingMatchers,
     });
   }
 
   // Attach to the same namespace as the collectors
   MC.addLoggingToFunctions = addLoggingToFunctions;
-
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = Object.assign({}, module.exports, {
-      addLoggingToFunctions,
-      withLogger(target, opts) {
-        addLoggingToFunctions(target, opts);
-        return MC;
-      },
-    });
-  }
 
 })(typeof globalThis !== 'undefined'
   ? globalThis
