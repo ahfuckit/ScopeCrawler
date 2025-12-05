@@ -295,14 +295,21 @@ MemberCollector.addLoggingToFunctions(globalThis, {
     { type: 'includes', value: 'fetch' }
   ],
   logger(info) {
-    const { label, key, args, result, error } = info;
+    const { label, key, args, result, error, phase } = info;
+    const prefix = `[${phase || 'call'}]`;
     if (error) {
-      console.warn(label, key, 'threw', error, 'with args', args);
+      console.warn(label, prefix, key, 'threw', error, 'with args', args);
     } else {
-      console.log(label, key, 'called with', args, '=>', result);
+      console.log(label, prefix, key, 'called with', args, '=>', result);
     }
   },
-  label: '[ScopeCrawler]'
+  label: '[ScopeCrawler]',
+  // instrument on the owning object/prototype instead of the root
+  wrapTarget: 'owner',
+  // log resolution / rejection when a wrapped function returns a Promise
+  awaitPromises: true,
+  // optionally scan one level into specific children
+  expandChildren: ['navigator', 'performance']
 });
 ```
 
@@ -312,41 +319,20 @@ You can also point it at library instances, custom API objects, etc.
 
 ## What’s in Development
 
-This project is intentionally small, but there are a few directions it’s likely to grow:
+This project is intentionally small and new improvements are landing incrementally.
 
-* **Async-aware logging wrappers**
+### Recent improvements
 
-  * Optional mode where `addLoggingToFunctions` detects Promises and logs *resolution/rejection* in addition to the immediate call, without changing return types.
-
-* **More precise wrapping targets**
-
-  * Options to choose whether to patch:
-
-    * the root object only,
-    * its prototype,
-    * or the exact owning object discovered by `collectMembersWide` (for less shadowing, more “surgical” instrumentation).
-
-* **Preset matcher packs**
-
-  * Shortcut configs for common patterns, for example:
-
-    * DOM event-style methods (`addEventListener`, `on*`),
-    * fetch/XHR/network-related methods,
-    * console/debug-style methods.
-
-* **Shallow vs deep scans**
-
-  * A higher-level helper that can:
-
-    * stay in the current “family” (the current behavior), or
-    * optionally walk one level down into selected properties (e.g. scan `window.navigator`, `window.performance`, etc.) in a controlled way.
-
-* **Better Node ergonomics**
-
-  * Small wrappers to make Node usage more explicit:
-
-    * `require('scopecrawler').withLogger(...)`
-    * Dedicated entry points for Node vs browser builds, if this grows.
+- **Async-aware logging wrappers**
+  * `addLoggingToFunctions` now supports an `awaitPromises` option that logs Promise resolution/rejection in addition to the immediate call without changing return types.
+- **More precise wrapping targets**
+  * Control where patches are applied via `wrapTarget`: `root`, `prototype`, or the owning object discovered by `collectMembersWide`.
+- **Preset matcher packs**
+  * Shortcut configs exposed under `MemberCollector.matcherPacks` (and `getMatcherPack`) for DOM events, network-related methods, and console/debug-style methods.
+- **Shallow vs deep scans**
+  * `collectMembersWide` and the logger accept `expandChildren` to optionally walk one level into specific properties (e.g. `window.navigator`, `window.performance`).
+- **Better Node ergonomics**
+  * `require('scopecrawler').withLogger(...)` augments the global collector and returns it for easy chaining.
 
 All of this is still intentionally lightweight: the goal is to keep ScopeCrawler as a small, composable primitive you can plug into bigger logging/visualization systems, not a monolithic devtools replacement.
 
