@@ -34,7 +34,7 @@
    *   value: string | RegExp | (key, value, sourceObj) => boolean
    *   transform: (key, value, matcherValue) => string | undefined
    */
-  function applyMatchers(matchers, key, value, sourceObj, resultSet) {
+  function applyMatchers(matchers, key, value, sourceObj, resultSet, onMatch) {
     for (let j = 0; j < matchers.length; j++) {
       const matcher = matchers[j];
       const mType = matcher.type;
@@ -88,6 +88,18 @@
       if (out != null && out !== '') {
         resultSet.add(String(out));
       }
+
+      if (typeof onMatch === 'function') {
+        try {
+          onMatch({
+            key,
+            value,
+            source: sourceObj,
+            matcher,
+            transformed: out,
+          });
+        } catch {}
+      }
     }
   }
 
@@ -105,6 +117,7 @@
     defaults = [],
     extra = [],
     matchers = [],
+    onMatch,
   } = {}) {
     const resultSet = new Set();
 
@@ -133,7 +146,7 @@
         continue;
       }
 
-      applyMatchers(matchers, key, value, source, resultSet);
+      applyMatchers(matchers, key, value, source, resultSet, onMatch);
     }
 
     return Array.from(resultSet);
@@ -158,6 +171,8 @@
     defaults = [],
     extra = [],
     matchers = [],
+    onMatch,
+    expandChildren = [],
   } = {}) {
     const resultSet = new Set();
 
@@ -179,6 +194,18 @@
 
     // Root
     addSource(root);
+
+    // Optionally walk one level down into selected properties for a wider scan
+    const expandList = Array.isArray(expandChildren) ? expandChildren : [expandChildren];
+    for (let i = 0; i < expandList.length; i++) {
+      const childKey = expandList[i];
+      if (typeof childKey !== 'string') continue;
+      try {
+        if (root && childKey in root) {
+          addSource(root[childKey]);
+        }
+      } catch {}
+    }
 
     // Constructor
     try {
@@ -268,7 +295,7 @@
           continue;
         }
 
-        applyMatchers(matchers, k, value, src, resultSet);
+        applyMatchers(matchers, k, value, src, resultSet, onMatch);
       }
     });
 
@@ -280,6 +307,32 @@
   const api = {
     collectMembers,
     collectMembersWide,
+  };
+
+  // Preset matcher packs for common discovery patterns
+  const matcherPacks = {
+    domEvents: [
+      { type: 'prefix', value: 'on' },
+      { type: 'includes', value: 'EventListener' },
+      { type: 'includes', value: 'EventTarget' },
+    ],
+    network: [
+      { type: 'includes', value: 'fetch' },
+      { type: 'includes', value: 'XHR' },
+      { type: 'includes', value: 'Request' },
+      { type: 'includes', value: 'Response' },
+    ],
+    console: [
+      { type: 'includes', value: 'log' },
+      { type: 'includes', value: 'warn' },
+      { type: 'includes', value: 'error' },
+      { type: 'includes', value: 'debug' },
+    ],
+  };
+
+  api.matcherPacks = matcherPacks;
+  api.getMatcherPack = function (name) {
+    return matcherPacks[name] ? matcherPacks[name].slice() : [];
   };
 
   // Global namespace
